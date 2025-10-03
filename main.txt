@@ -1,0 +1,291 @@
+# # import os
+# # import time
+# # import ee
+# # from flask import jsonify
+
+# # # Initialize EE
+# # SERVICE_ACCOUNT = os.environ.get("EE_SERVICE_ACCOUNT")
+# # PRIVATE_KEY_JSON = os.environ.get("EE_PRIVATE_KEY")
+# # if not SERVICE_ACCOUNT or not PRIVATE_KEY_JSON:
+# #     raise Exception("Missing Earth Engine credentials")
+
+# # credentials = ee.ServiceAccountCredentials(SERVICE_ACCOUNT, key_data=PRIVATE_KEY_JSON)
+# # ee.Initialize(credentials)
+
+# # def get_latest_tempo(request):
+# #     """Return latest TEMPO NO2 L3 layer as Cesium tile URL"""
+
+# #     # Load the collection
+# #     collection = ee.ImageCollection("NASA/TEMPO/NO2_L3") \
+# #         .sort("system:time_start", False)  # newest first
+
+# #     image = collection.first()  # latest available image
+# #     if not image:
+# #         return jsonify({"error": "No TEMPO NO2 images found"}), 404
+
+# #     vis_params = {
+# #         "min": 0,
+# #         "max": 1.5e16,
+# #         "bands": ["vertical_column_troposphere"],
+# #         "palette": [
+# #             '000080','0000D9','4000FF','8000FF','0080FF',
+# #             '00D9FF','80FFFF','FF8080','D90000','800000'
+# #         ]
+# #     }
+
+# #     try:
+# #         mapid = ee.data.getMapId({"image": image, "vis_params": vis_params})
+# #         tile_url = f"https://earthengine.googleapis.com/map/{mapid['mapid']}/{{z}}/{{x}}/{{y}}?token={mapid['token']}"
+# #     except ee.EEException as e:
+# #         return jsonify({"error": f"Failed to generate tile URL: {str(e)}"}), 500
+
+# #     return jsonify({"url": tile_url})
+
+
+
+    # import os
+    # import ee
+    # import requests
+    # from flask import Flask, jsonify, Response
+    # from functions_framework import create_app
+
+    # # ---------------- INIT ----------------
+    # # Flask app
+    # app = Flask(__name__)
+
+    # # ---------------- HELPERS ----------------
+    # def make_vis_palette():
+    #     return [
+    #         '004400', '008000', '00D900', 'A0FF00', 'FFFF00',
+    #         'FFC000', 'FF8000', 'FF4000', 'D90000', '800000'
+    #     ]
+
+
+    # def build_mapid(image, vis_params):
+    #     """Return a mapid string only (no token)."""
+    #     map_dict = image.getMapId(vis_params)
+    #     return map_dict["mapid"]
+
+
+    # # ---------------- EE INIT ----------------
+    # def ee_init():
+    #     """Lazy Earth Engine initialization per request."""
+    #     SERVICE_ACCOUNT = os.environ.get("EE_SERVICE_ACCOUNT")
+    #     PRIVATE_KEY_JSON = os.environ.get("EE_PRIVATE_KEY")
+    #     if not SERVICE_ACCOUNT or not PRIVATE_KEY_JSON:
+    #         raise Exception("Missing EE credentials")
+    #     credentials = ee.ServiceAccountCredentials(SERVICE_ACCOUNT, key_data=PRIVATE_KEY_JSON)
+    #     ee.Initialize(credentials)
+
+
+    # # ---------------- ENDPOINTS ----------------
+    # @app.route("/get_tempo_mapid", methods=["GET"])
+    # def get_tempo_mapid():
+    #     try:
+    #         ee_init()
+    #         collection = ee.ImageCollection("NASA/TEMPO/NO2_L3").sort("system:time_start", False)
+    #         image = collection.first()
+    #         if not image:
+    #             return jsonify({"error": "No TEMPO images found"}), 404
+
+    #         vis_params = {
+    #             "min": 0,
+    #             "max": 1.5e16,
+    #             "bands": ["vertical_column_troposphere"],
+    #             "palette": [
+    #                 '000080','0000D9','4000FF','8000FF','0080FF',
+    #                 '00D9FF','80FFFF','FF8080','D90000','800000'
+    #             ]
+    #         }
+
+    #         mapid = build_mapid(image, vis_params)
+    #         return jsonify({
+    #             "map_id": mapid,
+    #             "url_template": f"/tile/{mapid}/{{z}}/{{x}}/{{y}}"
+    #         })
+
+    #     except Exception as e:
+    #         return jsonify({"error": str(e)}), 500
+
+
+    # @app.route("/get_openaq_mapid", methods=["GET"])
+    # def get_openaq_mapid():
+    #     try:
+    #         ee_init()
+    #         all_points = ee.FeatureCollection("projects/saasbusiness-49fbe/assets/openaq_measurements")
+
+    #         def prep(f):
+    #             lon = ee.Number(f.get("lon"))
+    #             lat = ee.Number(f.get("lat"))
+    #             val = ee.Number(f.get("value"))
+    #             return ee.Feature(ee.Geometry.Point([lon, lat]), {"value": val})
+
+    #         pm25_points = all_points.filterMetadata("parameter", "equals", "pm25").map(prep)
+    #         no2_points = all_points.filterMetadata("parameter", "equals", "no2").map(prep)
+
+    #         na = ee.Geometry.Rectangle([-170, 5, -50, 85])
+    #         scale = 5000
+
+    #         def interpolate(points):
+    #             idw = points.reduceToImage(["value"], ee.Reducer.first())
+    #             interp = idw.reduceNeighborhood(
+    #                 reducer=ee.Reducer.mean(),
+    #                 kernel=ee.Kernel.gaussian(radius=100e3, sigma=50e3, units="meters")
+    #             ).reproject("EPSG:4326", None, scale).clip(na)
+    #             return interp
+
+    #         pm25 = interpolate(pm25_points)
+    #         no2 = interpolate(no2_points)
+
+    #         vis = {"min": 0, "max": 50, "palette": make_vis_palette()}
+
+    #         pm25_mapid = build_mapid(pm25, vis)
+    #         no2_mapid = build_mapid(no2, vis)
+
+    #         return jsonify({
+    #             "pm25_mapid": pm25_mapid,
+    #             "no2_mapid": no2_mapid,
+    #             "pm25_url_template": f"/tile/{pm25_mapid}/{{z}}/{{x}}/{{y}}",
+    #             "no2_url_template": f"/tile/{no2_mapid}/{{z}}/{{x}}/{{y}}"
+    #         })
+
+    #     except Exception as e:
+    #         return jsonify({"error": str(e)}), 500
+
+
+    # @app.route("/tile/<mapid>/<int:z>/<int:x>/<int:y>", methods=["GET"])
+    # def tile_proxy(mapid, z, x, y):
+    #     try:
+    #         ee_init()
+    #         tile_url = ee.data.getTileUrl(mapid, x, y, z)
+    #         r = requests.get(tile_url, timeout=30)
+    #         r.raise_for_status()
+    #         return Response(r.content, mimetype=r.headers.get("Content-Type", "image/png"))
+    #     except Exception as e:
+    #         return f"Tile proxy error: {e}", 500
+
+
+    # # ---------------- ENTRY POINT ----------------
+    # # Gen2 Cloud Function entry
+    # def app_entry(request):
+    #     return app(request)
+
+
+
+import os
+import ee
+import requests
+from flask import Flask, jsonify, Response
+
+# ---------------- INIT ----------------
+app = Flask(__name__)
+
+# ---------------- HELPERS ----------------
+def make_vis_palette():
+    return [
+        '004400', '008000', '00D900', 'A0FF00', 'FFFF00',
+        'FFC000', 'FF8000', 'FF4000', 'D90000', '800000'
+    ]
+
+def build_mapid(image, vis_params):
+    """Return a mapid string only (no token)."""
+    map_dict = image.getMapId(vis_params)
+    return map_dict["mapid"]
+
+# ---------------- EE INIT ----------------
+def ee_init():
+    """Lazy Earth Engine initialization per request."""
+    if not ee.data._credentials:
+        SERVICE_ACCOUNT = os.environ.get("EE_SERVICE_ACCOUNT")
+        PRIVATE_KEY_JSON = os.environ.get("EE_PRIVATE_KEY")
+        if not SERVICE_ACCOUNT or not PRIVATE_KEY_JSON:
+            raise Exception("Missing EE credentials")
+        credentials = ee.ServiceAccountCredentials(SERVICE_ACCOUNT, key_data=PRIVATE_KEY_JSON)
+        ee.Initialize(credentials)
+
+# ---------------- ENDPOINTS ----------------
+@app.route("/get_tempo_mapid", methods=["GET"])
+def get_tempo_mapid():
+    try:
+        ee_init()
+        collection = ee.ImageCollection("NASA/TEMPO/NO2_L3").sort("system:time_start", False)
+        image = collection.first()
+        if not image:
+            return jsonify({"error": "No TEMPO images found"}), 404
+
+        vis_params = {
+            "min": 0,
+            "max": 1.5e16,
+            "bands": ["vertical_column_troposphere"],
+            "palette": [
+                '000080','0000D9','4000FF','8000FF','0080FF',
+                '00D9FF','80FFFF','FF8080','D90000','800000'
+            ]
+        }
+
+        mapid = build_mapid(image, vis_params)
+        return jsonify({
+            "map_id": mapid,
+            "url_template": f"/tile/{mapid}/{{z}}/{{x}}/{{y}}"
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/get_openaq_mapid", methods=["GET"])
+def get_openaq_mapid():
+    try:
+        ee_init()
+        all_points = ee.FeatureCollection("projects/saasbusiness-49fbe/assets/openaq_measurements")
+
+        def prep(f):
+            lon = ee.Number(f.get("lon"))
+            lat = ee.Number(f.get("lat"))
+            val = ee.Number(f.get("value"))
+            return ee.Feature(ee.Geometry.Point([lon, lat]), {"value": val})
+
+        pm25_points = all_points.filterMetadata("parameter", "equals", "pm25").map(prep)
+        no2_points = all_points.filterMetadata("parameter", "equals", "no2").map(prep)
+
+        na = ee.Geometry.Rectangle([-170, 5, -50, 85])
+        scale = 5000
+
+        def interpolate(points):
+            idw = points.reduceToImage(["value"], ee.Reducer.first())
+            interp = idw.reduceNeighborhood(
+                reducer=ee.Reducer.mean(),
+                kernel=ee.Kernel.gaussian(radius=100e3, sigma=50e3, units="meters")
+            ).reproject("EPSG:4326", None, scale).clip(na)
+            return interp
+
+        pm25 = interpolate(pm25_points)
+        no2 = interpolate(no2_points)
+
+        vis = {"min": 0, "max": 50, "palette": make_vis_palette()}
+
+        pm25_mapid = build_mapid(pm25, vis)
+        no2_mapid = build_mapid(no2, vis)
+
+        return jsonify({
+            "pm25_mapid": pm25_mapid,
+            "no2_mapid": no2_mapid,
+            "pm25_url_template": f"/tile/{pm25_mapid}/{{z}}/{{x}}/{{y}}",
+            "no2_url_template": f"/tile/{no2_mapid}/{{z}}/{{x}}/{{y}}"
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/tile/<mapid>/<int:z>/<int:x>/<int:y>", methods=["GET"])
+def tile_proxy(mapid, z, x, y):
+    try:
+        ee_init()
+        tile_url = ee.data.getTileUrl(mapid, x, y, z)
+        r = requests.get(tile_url, timeout=30)
+        r.raise_for_status()
+        return Response(r.content, mimetype=r.headers.get("Content-Type", "image/png"))
+    except Exception as e:
+        return f"Tile proxy error: {e}", 500
+
+# ---------------- ENTRY POINT ----------------
+# Gen2 Cloud Function entry
+# Expose the Flask app itself as the callable
+

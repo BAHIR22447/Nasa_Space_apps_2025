@@ -1,0 +1,8 @@
+HTTP/2 500 
+content-type: text/html; charset=utf-8
+x-cloud-trace-context: 80deb1c1a69bb6da606e0891fe323616;o=1
+date: Mon, 29 Sep 2025 12:02:03 GMT
+server: Google Frontend
+content-length: 41
+
+Tile proxy error: list index out of range
